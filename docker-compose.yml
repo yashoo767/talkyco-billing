@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+  # ── Application ──────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      target: runner
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://talkyco:${POSTGRES_PASSWORD}@postgres:5432/talkyco_billing
+      REDIS_URL: redis://redis:6379
+      MESSAGING_ACCOUNT_SID:  ${MESSAGING_ACCOUNT_SID}
+      MESSAGING_AUTH_TOKEN:   ${MESSAGING_AUTH_TOKEN}
+      RATE_LIMIT_IP_PER_MINUTE:  ${RATE_LIMIT_IP_PER_MINUTE:-20}
+      RATE_LIMIT_PHONE_PER_HOUR: ${RATE_LIMIT_PHONE_PER_HOUR:-60}
+      RATE_LIMIT_IP_PER_HOUR:    ${RATE_LIMIT_IP_PER_HOUR:-200}
+      RATE_LIMIT_BLOCK_SECONDS:  ${RATE_LIMIT_BLOCK_SECONDS:-300}
+      CACHE_TTL_TODAY:      ${CACHE_TTL_TODAY:-120}
+      CACHE_TTL_YESTERDAY:  ${CACHE_TTL_YESTERDAY:-900}
+      CACHE_TTL_HISTORICAL: ${CACHE_TTL_HISTORICAL:-3600}
+      MAX_DATE_RANGE_DAYS:  ${MAX_DATE_RANGE_DAYS:-31}
+      NEXT_PUBLIC_APP_URL:  https://billing.talkyco.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - talkyco
+
+  # ── Database ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     talkyco
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       talkyco_billing
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U talkyco -d talkyco_billing"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+    networks:
+      - talkyco
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+    networks:
+      - talkyco
+
+  # ── DB migrations (runs once on deploy) ──────────────────────────────────
+  migrate:
+    build:
+      context: .
+      target: builder
+    command: npx prisma migrate deploy
+    environment:
+      DATABASE_URL: postgresql://talkyco:${POSTGRES_PASSWORD}@postgres:5432/talkyco_billing
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - talkyco
+    restart: "no"
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  talkyco:
+    driver: bridge

@@ -1,0 +1,89 @@
+// Talkyco Billing — Prisma Schema
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Synced message records ────────────────────────────────────────────────
+model Message {
+  id              String   @id @default(cuid())
+  // Provider's message ID — kept internal, never sent to client
+  providerMsgId   String   @unique @map("provider_msg_id")
+  phoneNumber     String   @map("phone_number")   // the number being billed
+  direction       MessageDirection
+  status          MessageStatus
+  numSegments     Int      @default(1) @map("num_segments")
+  // Stored as exact decimal string to avoid float precision loss
+  actualCost      String   @map("actual_cost")        // e.g. "0.0075"
+  currency        String   @default("USD")
+  sentAt          DateTime @map("sent_at")
+  syncedAt        DateTime @default(now()) @map("synced_at")
+
+  @@index([phoneNumber, sentAt])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+// ─── Daily aggregate cache (pre-computed for fast lookups) ────────────────
+model DailyAggregate {
+  id              String   @id @default(cuid())
+  phoneNumber     String   @map("phone_number")
+  date            DateTime @db.Date             // UTC date, no time component
+  outboundCount   Int      @default(0) @map("outbound_count")
+  inboundCount    Int      @default(0) @map("inbound_count")
+  totalSegments   Int      @default(0) @map("total_segments")
+  // Stored as exact decimal string
+  actualCost      String   @default("0") @map("actual_cost")
+  currency        String   @default("USD")
+  computedAt      DateTime @default(now()) @map("computed_at")
+
+  @@unique([phoneNumber, date])
+  @@index([phoneNumber, date])
+  @@map("daily_aggregates")
+}
+
+// ─── Sync state — track last successful sync per number ───────────────────
+model SyncState {
+  id            String   @id @default(cuid())
+  phoneNumber   String   @unique @map("phone_number")
+  lastSyncedAt  DateTime @map("last_synced_at")
+  lastError     String?  @map("last_error")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("sync_states")
+}
+
+// ─── Abuse / rate-limit events (for monitoring) ───────────────────────────
+model AbuseEvent {
+  id          String   @id @default(cuid())
+  ipAddress   String   @map("ip_address")
+  phoneNumber String?  @map("phone_number")
+  eventType   String   @map("event_type")   // "rate_limit_ip" | "rate_limit_phone" | "blocked"
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+
+  @@index([ipAddress, occurredAt])
+  @@index([occurredAt])
+  @@map("abuse_events")
+}
+
+enum MessageDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum MessageStatus {
+  DELIVERED
+  SENT
+  FAILED
+  UNDELIVERED
+  RECEIVED
+  QUEUED
+  SENDING
+  OTHER
+}
